@@ -57,15 +57,23 @@ Settings save automatically to `~/.config/open-opal-linux/settings.json`.
     balance leaves skin too red.
   - *Manual*: a fixed colour temperature. *Lock current* freezes whatever auto chose.
   - Lower K values give a bluer/cooler image. The ISP barely responds below ~2000 K.
-- **Exposure**: auto with compensation (−9…+9), or manual shutter and ISO. Shutter times
+- **Exposure**: auto with compensation (−9…+9), or manual shutter and ISO (up to 3200).
+  *Meter on face* runs a small face detector (YuNet) on the camera and aims auto exposure
+  at your face, and continuous autofocus too when that's on. It costs about 1% of a CPU
+  core. The model downloads from the Luxonis model zoo on first run, then stays cached. Shutter times
   above 33 ms would drop below 30 fps, so the slider stops there. Set anti-flicker to
   match your mains frequency (50 Hz in Europe).
 - **Image**: brightness, contrast, saturation, sharpness, and noise reduction for
-  brightness and colour, all applied on the chip.
+  brightness and colour, all applied on the chip. *Tuning* picks the image tuning loaded
+  onto the camera. *Low light* (the default) is Luxonis' low-light file, which `install.sh`
+  downloads: it gives a brighter, much more neutral image in dim rooms. Changing tuning
+  restarts the camera, which takes about 20 s.
 
 ## Notes
 
 - While Open Opal runs, it has exclusive use of the camera, and the regular Opal webcam
   device goes away. It returns when the app quits.
-- DepthAI warns `Calibration data not found`, because the Opal has no Luxonis calibration.
-  It's harmless, but it means the colour tuning is DepthAI's generic tuning, not Opal's.
+- DepthAI warns `Calibration data not found`, because the Opal has no Luxonis lens
+  calibration. It's harmless and has nothing to do with image tuning.
+- After you quit, the normal Opal webcam takes about 15 s to come back. If you start Open
+  Opal again before then, it waits for the camera to settle rather than failing.

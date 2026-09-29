@@ -26,7 +26,8 @@ class Settings:
     auto_exposure: bool = True
     exposure_compensation: int = 0  # -9..9
     exposure_us: int = 20000  # 1..33000 keeps 30 fps
-    iso: int = 800  # 100..1600
+    iso: int = 800  # 100..3200 (the low-light tuning allows above 1600)
+    face_metering: bool = True  # aim auto exposure (and continuous AF) at the largest face
     anti_banding: str = "MAINS_50_HZ"  # OFF, AUTO, MAINS_50_HZ, MAINS_60_HZ
 
     # image processing on the chip

@@ -2,7 +2,7 @@ from dataclasses import fields, replace
 
 import numpy as np
 from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
-from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtGui import QColor, QImage, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -198,19 +198,23 @@ class MainWindow(QMainWindow):
         box = QGroupBox("Exposure")
         form = QFormLayout(box)
         self.auto_exposure = QCheckBox("Auto exposure")
+        self.face_metering = QCheckBox("Meter on face")
+        self.face_metering.setToolTip("Aim auto exposure, and continuous autofocus, at the largest face in view")
         self.exposure_comp = SliderRow(-9, 9, fmt=signed)
         self.exposure_us = SliderRow(100, 33000, step=100, fmt=lambda v: f"{v / 1000:.1f} ms")
-        self.iso = SliderRow(100, 1600, step=50)
+        self.iso = SliderRow(100, 3200, step=50)
         self.anti_banding = QComboBox()
         for key, label in ANTI_BANDING:
             self.anti_banding.addItem(label, key)
         form.addRow(self.auto_exposure)
+        form.addRow(self.face_metering)
         form.addRow("Compensation", self.exposure_comp)
         form.addRow("Shutter", self.exposure_us)
         form.addRow("ISO", self.iso)
         form.addRow("Anti-flicker", self.anti_banding)
 
         self.auto_exposure.toggled.connect(lambda v: self._set(auto_exposure=v))
+        self.face_metering.toggled.connect(lambda v: self._set(face_metering=v))
         self.exposure_comp.changed.connect(lambda v: self._set(exposure_compensation=v))
         self.exposure_us.changed.connect(lambda v: self._set(exposure_us=v))
         self.iso.changed.connect(lambda v: self._set(iso=v))
@@ -270,6 +274,7 @@ class MainWindow(QMainWindow):
         self.wb_warmth.set_value(s.wb_warmth)
         self.wb_kelvin.set_value(s.wb_kelvin)
         self.auto_exposure.setChecked(s.auto_exposure)
+        self.face_metering.setChecked(s.face_metering)
         self.exposure_comp.set_value(s.exposure_compensation)
         self.exposure_us.set_value(s.exposure_us)
         self.iso.set_value(s.iso)
@@ -288,6 +293,7 @@ class MainWindow(QMainWindow):
         self.wb_kelvin.setEnabled(s.wb_mode == WB_MANUAL)
         self.wb_lock.setEnabled(s.wb_mode != WB_MANUAL)
         self.exposure_comp.setEnabled(s.auto_exposure)
+        self.face_metering.setEnabled(s.auto_exposure or s.auto_focus)
         self.exposure_us.setEnabled(not s.auto_exposure)
         self.iso.setEnabled(not s.auto_exposure)
 
@@ -340,6 +346,13 @@ class MainWindow(QMainWindow):
         pix = QPixmap.fromImage(qimg).scaled(
             self.preview.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
         )
+        face = self._last_stats.face if self._last_stats else None
+        if face and self.settings.face_metering:
+            x, y, w, h = face
+            painter = QPainter(pix)
+            painter.setPen(QPen(QColor(80, 220, 120), 2))
+            painter.drawRect(int(x * pix.width()), int(y * pix.height()), int(w * pix.width()), int(h * pix.height()))
+            painter.end()
         self.preview.setPixmap(pix)
 
     def _show_stats(self, st: Stats) -> None:

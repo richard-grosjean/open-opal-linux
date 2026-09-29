@@ -18,7 +18,7 @@ from typing import Callable, Optional
 import depthai as dai
 import numpy as np
 
-from . import usbstate
+from . import faces, usbstate
 from .settings import WB_AUTO, WB_AUTO_BIASED, WB_MANUAL, Settings
 from .v4l2out import V4L2LoopbackOutput, find_loopback_device
 
@@ -42,6 +42,12 @@ WB_LOOP_MAX_K = 10000.0
 CAMERA_SETTLE_SECONDS = 2.0
 RETRY_SECONDS = (2, 5, 10)
 
+FACE_MODEL = "luxonis/yunet:320x240"
+FACE_INTERVAL = 0.1  # decode at most 10 times a second; metering doesn't need more
+FACE_REGION_INTERVAL = 0.25
+FACE_LOST_SECONDS = 2.0
+FACE_EXPOSURE_MARGIN = 1.3  # meter a little beyond the face box
+
 DATA_DIR = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "open-opal-linux"
 TUNING_FILES = {"low_light": "tuning_color_low_light.bin"}
 
@@ -63,6 +69,7 @@ class Stats:
     exposure_us: int = 0
     wb_kelvin: int = 0
     output: str = ""
+    face: Optional[tuple[float, float, float, float]] = None  # normalised x, y, w, h
 
 
 def _ctrl() -> dai.CameraControl:
@@ -102,7 +109,7 @@ def build_controls(s: Settings, keys: Optional[set[str]] = None) -> list[dai.Cam
             c.setAutoExposureEnable()
             c.setAutoExposureCompensation(max(-9, min(9, s.exposure_compensation)))
         else:
-            c.setManualExposure(max(1, min(33000, s.exposure_us)), max(100, min(1600, s.iso)))
+            c.setManualExposure(max(1, min(33000, s.exposure_us)), max(100, min(3200, s.iso)))
         controls.append(c)
 
     if want("anti_banding"):
@@ -136,6 +143,69 @@ def red_blue_balance(bgr: np.ndarray) -> Optional[float]:
     return math.log(r / b)
 
 
+def _region(box: tuple[float, float, float, float], scale: float) -> tuple[int, int, int, int]:
+    """Normalised box, scaled around its centre, as sensor-pixel (x, y, w, h)."""
+    x, y, w, h = box
+    cx, cy = x + w / 2, y + h / 2
+    w, h = min(1.0, w * scale), min(1.0, h * scale)
+    x0, y0 = min(max(0.0, cx - w / 2), 1.0 - w), min(max(0.0, cy - h / 2), 1.0 - h)
+    sw, sh = SENSOR_SIZE
+    return int(x0 * sw), int(y0 * sh), max(1, int(w * sw)), max(1, int(h * sh))
+
+
+class FaceMeter:
+    """Smooths face detections and turns them into AE/AF region controls."""
+
+    def __init__(self):
+        self.box: Optional[tuple[float, float, float, float]] = None
+        self._last_seen = 0.0
+        self._last_sent = 0.0
+        self._sent_box: Optional[tuple[float, float, float, float]] = None
+        self._region_active = False
+
+    def observe(self, face, now: float) -> None:
+        if face is None:
+            if self.box and now - self._last_seen > FACE_LOST_SECONDS:
+                self.box = None
+            return
+        new = face[:4]
+        self._last_seen = now
+        if self.box is None:
+            self.box = new
+        else:
+            a = 0.35
+            self.box = tuple(o + a * (n - o) for o, n in zip(self.box, new))
+
+    def controls(self, s: Settings, now: float) -> list[dai.CameraControl]:
+        wanted = s.face_metering and (s.auto_exposure or s.auto_focus)
+        if not wanted or self.box is None:
+            if self._region_active:  # hand metering back to the whole frame
+                self._region_active = False
+                self._sent_box = None
+                full = (0, 0, *SENSOR_SIZE)
+                c = _ctrl()
+                c.setAutoExposureRegion(*full)
+                c2 = _ctrl()
+                c2.setAutoFocusRegion(*full)
+                return [c, c2]
+            return []
+        if now - self._last_sent < FACE_REGION_INTERVAL:
+            return []
+        if self._sent_box and max(abs(a - b) for a, b in zip(self.box, self._sent_box)) < 0.02:
+            return []
+        self._last_sent, self._sent_box, self._region_active = now, self.box, True
+        out = []
+        if s.auto_exposure:
+            c = _ctrl()
+            c.setAutoExposureRegion(*_region(self.box, FACE_EXPOSURE_MARGIN))
+            out.append(c)
+        if s.auto_focus:
+            c = _ctrl()
+            c.setAutoFocusRegion(*_region(self.box, 1.0))
+            out.append(c)
+        return out
+
+
 class CameraWorker:
     """Owns the device in a background thread; reconnects if the camera goes away."""
 
@@ -158,6 +228,8 @@ class CameraWorker:
         self._pending: "queue.Queue[tuple[Settings, Optional[set[str]]]]" = queue.Queue()
         self._one_shot_focus = threading.Event()
         self._restart = threading.Event()
+        self._face_archive: Optional[dai.NNArchive] = None
+        self._face_model_error: Optional[str] = None
         self._preview_enabled = True
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -242,6 +314,17 @@ class CameraWorker:
         except OSError as e:
             return None, f"{device}: {e.strerror}"
 
+    def _load_face_model(self) -> Optional[dai.NNArchive]:
+        """YuNet from the Luxonis model zoo; cached on disk after the first download."""
+        if self._face_archive is None and self._face_model_error is None:
+            try:
+                desc = dai.NNModelDescription(FACE_MODEL)
+                desc.platform = "RVC2"
+                self._face_archive = dai.NNArchive(dai.getModelFromZoo(desc))
+            except Exception as e:  # offline on first run, hub down, ...
+                self._face_model_error = str(e).splitlines()[0]
+        return self._face_archive
+
     def _session(self) -> None:
         # Connecting reboots the camera out of Opal's firmware and uploads DepthAI's over USB
         self._on_status("Restarting camera… (takes about 7 s)")
@@ -261,6 +344,21 @@ class CameraWorker:
                 maxSize=2, blocking=False
             )
             control_q = cam.inputControl.createInputQueue()
+
+            face_q = None
+            archive = self._load_face_model()
+            if archive is not None:
+                nn = pipeline.create(dai.node.NeuralNetwork)
+                nn.setNNArchive(archive)
+                nn.input.setBlocking(False)
+                nn.input.setMaxSize(1)
+                # same fps as the other outputs: mixed rates can stall the camera pipeline
+                cam.requestOutput(
+                    (faces.INPUT_W, faces.INPUT_H), dai.ImgFrame.Type.BGR888p, dai.ImgResizeMode.STRETCH, fps=FPS
+                ).link(nn.input)
+                face_q = nn.out.createOutputQueue(maxSize=1, blocking=False)
+            meter = FaceMeter()
+            last_face = 0.0
             pipeline.start()
 
             s = self._settings
@@ -268,10 +366,12 @@ class CameraWorker:
                 control_q.send(c)
 
             output, output_label = self._open_output()
+            notes = []
             if self._settings.tuning in TUNING_FILES and not blob:
-                self._on_status("Streaming (tuning file missing, using default; run install.sh)")
-            else:
-                self._on_status("Streaming")
+                notes.append("tuning file missing, using default; run install.sh")
+            if face_q is None:
+                notes.append(f"face metering unavailable: {self._face_model_error}")
+            self._on_status("Streaming" + (f" ({'; '.join(notes)})" if notes else ""))
 
             wb_kelvin = float(s.wb_kelvin)
             last_wb_step = 0.0
@@ -335,6 +435,23 @@ class CameraWorker:
                             wb_kelvin = self._wb_step(img, wb_kelvin, s.wb_warmth, control_q)
 
                     now = time.monotonic()
+                    if face_q is not None and now - last_face >= FACE_INTERVAL:
+                        result = face_q.tryGet()
+                        if result is not None:
+                            last_face = now
+                            if s.face_metering:
+                                meter.observe(
+                                    faces.best_face(
+                                        result.getTensor("loc"), result.getTensor("conf"), result.getTensor("iou")
+                                    ),
+                                    now,
+                                )
+                            else:
+                                meter.box = None
+                        stats.face = meter.box
+                    for c in meter.controls(s, now):
+                        control_q.send(c)
+
                     if focus_deadline and now >= focus_deadline:
                         focus_deadline = 0.0
                         s = self._settings = replace(s, auto_focus=False, lens_position=stats.lens_position)

@@ -25,6 +25,12 @@ with Opal Camera.
    sudo modprobe v4l2loopback
    ```
    `exclusive_caps=1` is what makes Chrome list it.
+3. **Optional: turn off USB power saving for the camera.** The Myriad X can misbehave in
+   USB3 low-power link states:
+   ```sh
+   sudo cp packaging/open-opal-usb.conf /etc/tmpfiles.d/
+   sudo systemd-tmpfiles --create /etc/tmpfiles.d/open-opal-usb.conf
+   ```
 
 ## Install and run
 

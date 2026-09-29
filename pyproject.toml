@@ -1,0 +1,16 @@
+[project]
+name = "open-opal-linux"
+version = "0.1.0"
+description = "Opal C1 webcam controls for Linux: manual focus, white balance and exposure on the camera's own ISP"
+requires-python = ">=3.10"
+dependencies = ["depthai>=3.10", "PySide6-Essentials>=6.8", "numpy"]
+
+[project.scripts]
+open-opal = "openopal.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["openopal"]

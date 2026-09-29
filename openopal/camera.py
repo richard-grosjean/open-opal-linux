@@ -21,7 +21,7 @@ from .v4l2out import V4L2LoopbackOutput, find_loopback_device
 
 OUTPUT_SIZE = (1920, 1080)
 PREVIEW_SIZE = (640, 360)
-PREVIEW_FPS = 15
+PREVIEW_FPS = 30
 SENSOR_SIZE = (3840, 2160)
 FPS = 30
 

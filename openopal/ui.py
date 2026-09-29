@@ -1,7 +1,7 @@
 from dataclasses import fields, replace
 
 import numpy as np
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -99,10 +99,8 @@ class MainWindow(QMainWindow):
         self._save_timer.setInterval(800)
         self._save_timer.timeout.connect(self._save)
 
-        self._loading = True  # widgets fire change signals while being built
-        self._build_ui()
-        self._load_into_widgets(self.settings)
-
+        # Start connecting first: the camera takes seconds to boot, the window milliseconds.
+        # Signals are queued until the event loop runs, by which time the widgets exist.
         self.worker = CameraWorker(
             self.settings,
             on_preview=self.bridge.preview.emit,
@@ -112,6 +110,10 @@ class MainWindow(QMainWindow):
             output_device=output_device,
         )
         self.worker.start()
+
+        self._loading = True  # widgets fire change signals while being built
+        self._build_ui()
+        self._load_into_widgets(self.settings)
 
     # --- layout -----------------------------------------------------------------------
 
@@ -347,8 +349,13 @@ class MainWindow(QMainWindow):
 
     def _show_status(self, text: str) -> None:
         self.statusBar().showMessage(text)
-        if text != "Streaming":
+        if not text.startswith("Streaming"):
             self.preview.setText(text)
+
+    def changeEvent(self, event) -> None:
+        if event.type() == QEvent.Type.WindowStateChange:
+            self.worker.set_preview_enabled(not self.isMinimized())
+        super().changeEvent(event)
 
     def closeEvent(self, event) -> None:
         self._save()

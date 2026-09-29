@@ -10,6 +10,7 @@ import queue
 import threading
 import time
 from dataclasses import dataclass, replace
+from datetime import timedelta
 from typing import Callable, Optional
 
 import depthai as dai
@@ -20,11 +21,14 @@ from .v4l2out import V4L2LoopbackOutput, find_loopback_device
 
 OUTPUT_SIZE = (1920, 1080)
 PREVIEW_SIZE = (640, 360)
+PREVIEW_FPS = 15
 SENSOR_SIZE = (3840, 2160)
 FPS = 30
 
 ONE_SHOT_FOCUS_SECONDS = 1.5
 WB_LOOP_INTERVAL = 0.25
+# the loop sleeps on the frame queue; this bounds how long a UI change waits without frames
+FRAME_WAIT = timedelta(milliseconds=50)
 # the ISP barely responds to manual white balance below ~2000 K
 WB_LOOP_MIN_K = 2000.0
 WB_LOOP_MAX_K = 10000.0
@@ -132,6 +136,7 @@ class CameraWorker:
 
         self._pending: "queue.Queue[tuple[Settings, Optional[set[str]]]]" = queue.Queue()
         self._one_shot_focus = threading.Event()
+        self._preview_enabled = True
         self._running = False
         self._thread: Optional[threading.Thread] = None
 
@@ -152,6 +157,9 @@ class CameraWorker:
 
     def focus_once(self) -> None:
         self._one_shot_focus.set()
+
+    def set_preview_enabled(self, enabled: bool) -> None:
+        self._preview_enabled = enabled
 
     # --- camera thread ---------------------------------------------------------------
 
@@ -175,15 +183,17 @@ class CameraWorker:
             return None, f"{device}: {e.strerror}"
 
     def _session(self) -> None:
-        self._on_status("Connecting to camera…")
+        # Connecting reboots the camera out of Opal's firmware and uploads DepthAI's over USB
+        self._on_status("Restarting camera… (takes about 7 s)")
         with dai.Pipeline() as pipeline:
+            self._on_status("Starting stream…")
             cam = pipeline.create(dai.node.Camera).build(
                 dai.CameraBoardSocket.CAM_A, sensorResolution=SENSOR_SIZE, sensorFps=FPS
             )
             main_q = cam.requestOutput(OUTPUT_SIZE, dai.ImgFrame.Type.NV12, fps=FPS).createOutputQueue(
                 maxSize=2, blocking=False
             )
-            preview_q = cam.requestOutput(PREVIEW_SIZE, dai.ImgFrame.Type.BGR888i, fps=FPS).createOutputQueue(
+            preview_q = cam.requestOutput(PREVIEW_SIZE, dai.ImgFrame.Type.BGR888i, fps=PREVIEW_FPS).createOutputQueue(
                 maxSize=2, blocking=False
             )
             control_q = cam.inputControl.createInputQueue()
@@ -231,7 +241,7 @@ class CameraWorker:
                         control_q.send(c)
                         focus_deadline = time.monotonic() + ONE_SHOT_FOCUS_SECONDS
 
-                    frame = main_q.tryGet()
+                    frame = main_q.get(FRAME_WAIT)  # wakes once per frame instead of polling
                     if frame is not None:
                         if output:
                             try:
@@ -248,7 +258,8 @@ class CameraWorker:
                     preview = preview_q.tryGet()
                     if preview is not None:
                         img = preview.getCvFrame()
-                        self._on_preview(img)
+                        if self._preview_enabled:
+                            self._on_preview(img)
                         now = time.monotonic()
                         if s.wb_mode == WB_AUTO_BIASED and now - last_wb_step >= WB_LOOP_INTERVAL:
                             last_wb_step = now
@@ -267,8 +278,6 @@ class CameraWorker:
                         frames, fps_t0 = 0, now
                         self._on_stats(replace(stats))
 
-                    if frame is None and preview is None:
-                        time.sleep(0.002)
             finally:
                 if output:
                     output.close()

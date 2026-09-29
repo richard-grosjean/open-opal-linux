@@ -1,9 +1,18 @@
 import argparse
+import ctypes
 import sys
 
-from PySide6.QtWidgets import QApplication
+# Serve 3 MB frame buffers straight from mmap so they go back to the OS when freed.
+# Otherwise glibc's adaptive threshold keeps them in the heap and RSS drifts up by ~100 MB.
+M_MMAP_THRESHOLD = -3
+try:
+    ctypes.CDLL("libc.so.6").mallopt(M_MMAP_THRESHOLD, 1 << 20)
+except OSError:
+    pass
 
-from .ui import MainWindow
+from PySide6.QtWidgets import QApplication  # noqa: E402
+
+from .ui import MainWindow  # noqa: E402
 
 
 def main() -> int:

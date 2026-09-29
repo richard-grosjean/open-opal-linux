@@ -30,6 +30,7 @@ class Settings:
     anti_banding: str = "MAINS_50_HZ"  # OFF, AUTO, MAINS_50_HZ, MAINS_60_HZ
 
     # image processing on the chip
+    tuning: str = "low_light"  # "low_light" (Luxonis low-light blob) or "default"; applies on connect
     brightness: int = 0  # -10..10
     contrast: int = 0  # -10..10
     saturation: int = 0  # -10..10

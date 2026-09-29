@@ -6,16 +6,19 @@ small BGR preview for the UI.
 """
 
 import math
+import os
 import queue
 import threading
 import time
 from dataclasses import dataclass, replace
 from datetime import timedelta
+from pathlib import Path
 from typing import Callable, Optional
 
 import depthai as dai
 import numpy as np
 
+from . import usbstate
 from .settings import WB_AUTO, WB_AUTO_BIASED, WB_MANUAL, Settings
 from .v4l2out import V4L2LoopbackOutput, find_loopback_device
 
@@ -32,6 +35,24 @@ FRAME_WAIT = timedelta(milliseconds=50)
 # the ISP barely responds to manual white balance below ~2000 K
 WB_LOOP_MIN_K = 2000.0
 WB_LOOP_MAX_K = 10000.0
+
+# The camera must sit in Opal's firmware this long before we connect. Connecting while it
+# is still coming back from a previous session fails ("Couldn't get bootloader version"),
+# and rapid switching can leave Opal's firmware unstable.
+CAMERA_SETTLE_SECONDS = 2.0
+RETRY_SECONDS = (2, 5, 10)
+
+DATA_DIR = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "open-opal-linux"
+TUNING_FILES = {"low_light": "tuning_color_low_light.bin"}
+
+
+def tuning_path(name: str) -> Optional[Path]:
+    """The tuning blob for a setting, or None for DepthAI's built-in tuning."""
+    filename = TUNING_FILES.get(name)
+    if filename is None:
+        return None
+    path = DATA_DIR / filename
+    return path if path.is_file() else None
 
 
 @dataclass
@@ -136,6 +157,7 @@ class CameraWorker:
 
         self._pending: "queue.Queue[tuple[Settings, Optional[set[str]]]]" = queue.Queue()
         self._one_shot_focus = threading.Event()
+        self._restart = threading.Event()
         self._preview_enabled = True
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -164,12 +186,50 @@ class CameraWorker:
     # --- camera thread ---------------------------------------------------------------
 
     def _run(self) -> None:
+        failures = 0
         while self._running:
+            if not self._wait_for_camera():
+                return
             try:
                 self._session()
+                failures = 0
             except Exception as e:  # device unplugged, busy, firmware hiccup, ...
-                self._on_status(f"Camera error: {e}. Retrying…")
-                time.sleep(2)
+                delay = RETRY_SECONDS[min(failures, len(RETRY_SECONDS) - 1)]
+                failures += 1
+                self._on_status(f"Camera error: {e}. Retrying in {delay} s…")
+                self._sleep(delay)
+
+    def _sleep(self, seconds: float) -> None:
+        end = time.monotonic() + seconds
+        while self._running and time.monotonic() < end:
+            time.sleep(0.1)
+
+    def _wait_for_camera(self) -> bool:
+        """Block until the camera has settled in Opal's firmware. False if stopped."""
+        messages = {
+            usbstate.ABSENT: "Camera is restarting or unplugged… waiting",
+            usbstate.DEPTHAI: "Camera is still being released… waiting",
+            usbstate.BOOTLOADER: "Camera is rebooting… waiting",
+        }
+        stable_since = None
+        shown = None
+        while self._running:
+            state = usbstate.opal_state()
+            if state == usbstate.CAMERA:
+                stable_since = stable_since or time.monotonic()
+                if time.monotonic() - stable_since >= CAMERA_SETTLE_SECONDS:
+                    return True
+            else:
+                stable_since = None
+                if shown != state:
+                    self._on_status(messages[state])
+                    shown = state
+            time.sleep(0.2)
+        return False
+
+    def restart(self) -> None:
+        """Reconnect the camera, e.g. after a setting that only applies at startup."""
+        self._restart.set()
 
     def _open_output(self) -> tuple[Optional[V4L2LoopbackOutput], str]:
         if not self._settings.output_enabled:
@@ -185,8 +245,12 @@ class CameraWorker:
     def _session(self) -> None:
         # Connecting reboots the camera out of Opal's firmware and uploads DepthAI's over USB
         self._on_status("Restarting camera… (takes about 7 s)")
+        self._restart.clear()
         with dai.Pipeline() as pipeline:
             self._on_status("Starting stream…")
+            blob = tuning_path(self._settings.tuning)
+            if blob:
+                pipeline.setCameraTuningBlobPath(str(blob))
             cam = pipeline.create(dai.node.Camera).build(
                 dai.CameraBoardSocket.CAM_A, sensorResolution=SENSOR_SIZE, sensorFps=FPS
             )
@@ -204,7 +268,10 @@ class CameraWorker:
                 control_q.send(c)
 
             output, output_label = self._open_output()
-            self._on_status("Streaming")
+            if self._settings.tuning in TUNING_FILES and not blob:
+                self._on_status("Streaming (tuning file missing, using default; run install.sh)")
+            else:
+                self._on_status("Streaming")
 
             wb_kelvin = float(s.wb_kelvin)
             last_wb_step = 0.0
@@ -213,7 +280,7 @@ class CameraWorker:
             stats = Stats(output=output_label)
 
             try:
-                while self._running and pipeline.isRunning():
+                while self._running and pipeline.isRunning() and not self._restart.is_set():
                     # apply settings changes from the UI
                     while True:
                         try:
@@ -222,6 +289,8 @@ class CameraWorker:
                             break
                         entering_biased = new.wb_mode == WB_AUTO_BIASED and s.wb_mode != WB_AUTO_BIASED
                         output_toggled = new.output_enabled != s.output_enabled
+                        if "tuning" in (keys or ()) and new.tuning != s.tuning:
+                            self._restart.set()
                         s = self._settings = new
                         for c in build_controls(s, keys):
                             control_q.send(c)

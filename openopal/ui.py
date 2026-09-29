@@ -27,6 +27,10 @@ WB_MODES = [
     (WB_AUTO_BIASED, "Auto + warmth bias"),
     (WB_MANUAL, "Manual"),
 ]
+TUNINGS = [
+    ("low_light", "Low light (Luxonis)"),
+    ("default", "DepthAI default"),
+]
 ANTI_BANDING = [
     ("MAINS_50_HZ", "50 Hz"),
     ("MAINS_60_HZ", "60 Hz"),
@@ -218,6 +222,12 @@ class MainWindow(QMainWindow):
     def _image_group(self) -> QGroupBox:
         box = QGroupBox("Image")
         form = QFormLayout(box)
+        self.tuning = QComboBox()
+        for key, label in TUNINGS:
+            self.tuning.addItem(label, key)
+        self.tuning.setToolTip("Colour and exposure tuning loaded onto the camera. Changing it restarts the camera (about 20 s).")
+        form.addRow("Tuning", self.tuning)
+        self.tuning.currentIndexChanged.connect(lambda _: self._set(tuning=self.tuning.currentData()))
         self.image_sliders = {
             "brightness": SliderRow(-10, 10, fmt=signed),
             "contrast": SliderRow(-10, 10, fmt=signed),
@@ -264,6 +274,7 @@ class MainWindow(QMainWindow):
         self.exposure_us.set_value(s.exposure_us)
         self.iso.set_value(s.iso)
         self.anti_banding.setCurrentIndex(self.anti_banding.findData(s.anti_banding))
+        self.tuning.setCurrentIndex(max(0, self.tuning.findData(s.tuning)))
         for key, row in self.image_sliders.items():
             row.set_value(getattr(s, key))
         self.output_enabled.setChecked(s.output_enabled)

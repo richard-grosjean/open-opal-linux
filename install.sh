@@ -6,6 +6,12 @@ cd "$(dirname "$0")"
 python3 -m venv .venv
 .venv/bin/pip install -q --upgrade pip
 .venv/bin/pip install -q -e .
+# Luxonis low-light tuning (not redistributed in this repo)
+data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/open-opal-linux"
+mkdir -p "$data_dir"
+[ -f "$data_dir/tuning_color_low_light.bin" ] || curl -fsSL -o "$data_dir/tuning_color_low_light.bin" \
+  https://artifacts.luxonis.com/artifactory/luxonis-depthai-data-local/misc/tuning_color_low_light.bin
+
 mkdir -p ~/.local/share/applications
 sed "s|@VENV@|$PWD/.venv|" open-opal.desktop > ~/.local/share/applications/open-opal.desktop
 echo "Installed. Launch 'Open Opal' from the menu or run: $PWD/.venv/bin/open-opal"

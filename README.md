@@ -45,6 +45,10 @@ receives frames. If the camera doesn't show up, reload the tab.
 
 Settings save automatically to `~/.config/open-opal-linux/settings.json`.
 
+On KDE Plasma the app uses your Breeze style, colours and icons when the distro's Qt matches
+the bundled one (same major.minor); otherwise it falls back to Qt's Fusion style. Set
+`OPEN_OPAL_NO_SYSTEM_THEME=1` to always use Fusion.
+
 ## Controls
 
 - **Focus**: continuous autofocus, a fixed lens position (0–255), or *Focus once, then

@@ -4,3 +4,5 @@ __pycache__/
 build/
 .work/
 dist/
+native/build/
+native/deps/

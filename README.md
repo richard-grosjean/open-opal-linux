@@ -34,6 +34,23 @@ with Opal Camera.
 
 ## Install and run
 
+There are two builds of the same app. Both read the same settings file.
+
+**Native (C++ / Qt 6)** — a single binary, about 200 MB of memory in use versus 330 MB for the
+Python version, and no venv. On CachyOS or Arch:
+
+```sh
+sudo pacman -S --needed cmake ninja git curl zip pkgconf qt6-base   # build tools
+native/build.sh install     # builds a slim depthai-core (~2 min on many cores), the app, and a menu entry
+~/.local/bin/open-opal      # or "Open Opal" in the app menu
+```
+
+`packaging/PKGBUILD` builds the same thing as a pacman package (`cd packaging && makepkg -si`),
+which also installs the udev rule and the v4l2loopback module configuration from the setup
+steps above.
+
+**Python (PySide6)** — the original:
+
 ```sh
 ./install.sh            # venv + editable install + menu entry
 .venv/bin/open-opal     # or "Open Opal" in the app menu

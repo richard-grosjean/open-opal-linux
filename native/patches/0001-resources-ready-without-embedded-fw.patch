@@ -1,0 +1,31 @@
+From: Open Opal for Linux
+Subject: [PATCH] Resources: mark firmware maps ready when binaries are not compiled in
+
+With DEPTHAI_BINARIES_RESOURCE_COMPILE=OFF no lazy-load thread runs, so readyDevice and
+readyBootloader stay false (uninitialised) and getDeviceFirmware() waits on the condition
+variable forever, even when DEPTHAI_DEVICE_BINARY points at a firmware file.
+---
+ src/utility/Resources.cpp | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/src/utility/Resources.cpp b/src/utility/Resources.cpp
+--- a/src/utility/Resources.cpp
++++ b/src/utility/Resources.cpp
+@@ -480,6 +480,8 @@ Resources::Resources() {
+     // Device resources
+     // Create a thread which lazy-loads firmware resources package
+     lazyThreadDevice = std::thread(getLazyTarXzFunction(mtxDevice, cvDevice, readyDevice, CMRC_DEPTHAI_DEVICE_TAR_XZ, RESOURCE_LIST_DEVICE, resourceMapDevice));
++#else
++    readyDevice = true;
+ #endif
+ 
+ // First check if device bootloader fw is enabled
+@@ -488,6 +490,8 @@ Resources::Resources() {
+     // Create a thread which lazy-loads firmware resources package
+     lazyThreadBootloader = std::thread(
+         getLazyTarXzFunction(mtxBootloader, cvBootloader, readyBootloader, CMRC_DEPTHAI_BOOTLOADER_TAR_XZ, RESOURCE_LIST_BOOTLOADER, resourceMapBootloader));
++#else
++    readyBootloader = true;
+ #endif
+ }
+ 

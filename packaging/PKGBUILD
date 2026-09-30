@@ -1,0 +1,64 @@
+# Maintainer: Richard Grosjean
+# Native Open Opal for Arch/CachyOS. Builds a slim static depthai-core and the Qt 6 app.
+# Build from the repo:  cd packaging && makepkg -si
+pkgname=open-opal-linux
+pkgver=0.2.0
+pkgrel=1
+pkgdesc="Opal C1 webcam controls for Linux: focus, white balance and exposure on the camera's own ISP"
+arch=(x86_64)
+url="https://github.com/richardgrosjean/open-opal-linux"
+license=(MIT)
+depends=(qt6-base libusb systemd-libs v4l2loopback-dkms)
+makedepends=(cmake ninja git curl zip pkgconf python)
+_depthai_tag=v3.10.0
+source=("git+https://github.com/luxonis/depthai-core.git#tag=${_depthai_tag}")
+sha256sums=(SKIP)
+
+prepare() {
+  cd "$srcdir/depthai-core"
+  git submodule update --init --recursive --depth 1
+  git apply "$startdir"/../native/patches/*.patch
+  # runtime data files, fetched at build time (not redistributed in the package sources)
+  "$startdir/../native/fetch-data.sh" "$srcdir/data"
+}
+
+build() {
+  cmake -S "$srcdir/depthai-core" -B "$srcdir/depthai-build" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+    -DCMAKE_INSTALL_PREFIX="$srcdir/depthai-install" \
+    -DDEPTHAI_OPENCV_SUPPORT=OFF -DDEPTHAI_ENABLE_PROTOBUF=OFF -DDEPTHAI_ENABLE_CURL=OFF \
+    -DDEPTHAI_ENABLE_MP4V2=OFF -DDEPTHAI_ENABLE_APRIL_TAG=OFF -DDEPTHAI_ENABLE_KOMPUTE=OFF \
+    -DDEPTHAI_DYNAMIC_CALIBRATION_SUPPORT=OFF -DDEPTHAI_BUILD_BETA=OFF \
+    -DDEPTHAI_ENABLE_DEVICE_RVC4_FW=OFF -DDEPTHAI_ENABLE_DEVICE_RVC3_FW=OFF \
+    -DDEPTHAI_BUILD_EXAMPLES=OFF -DDEPTHAI_BUILD_TESTS=OFF -DDEPTHAI_CLANG_FORMAT=OFF \
+    -DDEPTHAI_BINARIES_RESOURCE_COMPILE=OFF
+  cmake --build "$srcdir/depthai-build"
+  cmake --install "$srcdir/depthai-build"
+
+  cmake -S "$startdir/../native" -B "$srcdir/app-build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_TOOLCHAIN_FILE="$srcdir/depthai-build/vcpkg/scripts/buildsystems/vcpkg.cmake" \
+    -DVCPKG_INSTALLED_DIR="$srcdir/depthai-build/vcpkg_installed" \
+    -DVCPKG_MANIFEST_MODE=OFF -DVCPKG_TARGET_TRIPLET=x64-linux \
+    -DCMAKE_PREFIX_PATH="$srcdir/depthai-install" -DCMAKE_INSTALL_PREFIX=/usr
+  cmake --build "$srcdir/app-build"
+}
+
+package() {
+  DESTDIR="$pkgdir" cmake --install "$srcdir/app-build"
+  "$startdir/../native/extract-firmware.sh" "$srcdir/depthai-install" "$srcdir/data"
+  install -Dm644 "$srcdir/data/depthai-device-firmware.cmd" -t "$pkgdir/usr/share/open-opal-linux/"
+  install -Dm644 "$srcdir/data/tuning_color_low_light.bin" "$srcdir/data/yunet-s-240x320.rvc2.tar.xz" \
+    -t "$pkgdir/usr/share/open-opal-linux/"
+  sed 's|@VENV@/bin/open-opal|/usr/bin/open-opal|' "$startdir/../open-opal.desktop" > "$srcdir/open-opal.desktop"
+  install -Dm644 "$srcdir/open-opal.desktop" "$pkgdir/usr/share/applications/open-opal.desktop"
+  # USB access for DepthAI (the Opal enumerates as Movidius 03e7)
+  echo 'SUBSYSTEM=="usb", ATTRS{idVendor}=="03e7", MODE="0666"' > "$srcdir/80-movidius.rules"
+  install -Dm644 "$srcdir/80-movidius.rules" "$pkgdir/usr/lib/udev/rules.d/80-movidius.rules"
+  # virtual camera: load v4l2loopback at boot with a label Chrome lists
+  echo v4l2loopback > "$srcdir/v4l2loopback.conf"
+  install -Dm644 "$srcdir/v4l2loopback.conf" "$pkgdir/usr/lib/modules-load.d/open-opal-v4l2loopback.conf"
+  echo 'options v4l2loopback exclusive_caps=1 card_label="Opal C1 (Open Opal)" video_nr=10' > "$srcdir/v4l2loopback-options.conf"
+  install -Dm644 "$srcdir/v4l2loopback-options.conf" "$pkgdir/usr/lib/modprobe.d/open-opal-v4l2loopback.conf"
+  # optional USB power-saving quirk, installed but only active once copied to /etc/tmpfiles.d
+  install -Dm644 "$startdir/open-opal-usb.conf" "$pkgdir/usr/share/open-opal-linux/open-opal-usb.conf"
+}

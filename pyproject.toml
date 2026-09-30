@@ -1,6 +1,7 @@
 [project]
 name = "open-opal-linux"
 version = "0.1.0"
+readme = "README.md"
 description = "Opal C1 webcam controls for Linux: manual focus, white balance and exposure on the camera's own ISP"
 requires-python = ">=3.10"
 dependencies = ["depthai>=3.10", "PySide6-Essentials>=6.8", "numpy"]

@@ -8,7 +8,7 @@ pkgdesc="Opal C1 webcam controls for Linux: focus, white balance and exposure on
 arch=(x86_64)
 url="https://github.com/richardgrosjean/open-opal-linux"
 license=(MIT)
-depends=(qt6-base libusb systemd-libs v4l2loopback-dkms)
+depends=(qt6-base libusb v4l2loopback-dkms)
 makedepends=(cmake ninja git curl zip pkgconf python)
 _depthai_tag=v3.10.0
 source=("git+https://github.com/luxonis/depthai-core.git#tag=${_depthai_tag}")
@@ -23,6 +23,9 @@ prepare() {
 }
 
 build() {
+  # depthai-core bakes __FILE__ into its log macros; keep the build directory out of the binary
+  export CFLAGS="$CFLAGS -ffile-prefix-map=$srcdir=."
+  export CXXFLAGS="$CXXFLAGS -ffile-prefix-map=$srcdir=."
   cmake -S "$srcdir/depthai-core" -B "$srcdir/depthai-build" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
     -DCMAKE_INSTALL_PREFIX="$srcdir/depthai-install" \
@@ -31,7 +34,7 @@ build() {
     -DDEPTHAI_DYNAMIC_CALIBRATION_SUPPORT=OFF -DDEPTHAI_BUILD_BETA=OFF \
     -DDEPTHAI_ENABLE_DEVICE_RVC4_FW=OFF -DDEPTHAI_ENABLE_DEVICE_RVC3_FW=OFF \
     -DDEPTHAI_BUILD_EXAMPLES=OFF -DDEPTHAI_BUILD_TESTS=OFF -DDEPTHAI_CLANG_FORMAT=OFF \
-    -DDEPTHAI_BINARIES_RESOURCE_COMPILE=OFF
+    -DDEPTHAI_BINARIES_RESOURCE_COMPILE=OFF -DDEPTHAI_ENABLE_BACKWARD=OFF
   cmake --build "$srcdir/depthai-build"
   cmake --install "$srcdir/depthai-build"
 

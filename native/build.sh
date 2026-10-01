@@ -31,7 +31,7 @@ if [ ! -f "$deps/install/lib/cmake/depthai/depthaiConfig.cmake" ]; then
     -DDEPTHAI_DYNAMIC_CALIBRATION_SUPPORT=OFF -DDEPTHAI_BUILD_BETA=OFF \
     -DDEPTHAI_ENABLE_DEVICE_RVC4_FW=OFF -DDEPTHAI_ENABLE_DEVICE_RVC3_FW=OFF \
     -DDEPTHAI_BUILD_EXAMPLES=OFF -DDEPTHAI_BUILD_TESTS=OFF -DDEPTHAI_CLANG_FORMAT=OFF \
-    -DDEPTHAI_BINARIES_RESOURCE_COMPILE=OFF
+    -DDEPTHAI_BINARIES_RESOURCE_COMPILE=OFF -DDEPTHAI_ENABLE_BACKWARD=OFF
   cmake --build "$deps/depthai-core/build" --parallel "$jobs"
   cmake --install "$deps/depthai-core/build"
 fi

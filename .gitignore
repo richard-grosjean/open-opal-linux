@@ -6,3 +6,7 @@ build/
 dist/
 native/build/
 native/deps/
+packaging/src/
+packaging/pkg/
+packaging/depthai-core/
+packaging/*.pkg.tar.*

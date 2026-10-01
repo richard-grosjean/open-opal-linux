@@ -12,7 +12,7 @@ endif()
 # Point depthai_DIR at <install prefix>/lib/cmake/depthai.
 # depthai::core is static and lists its private dependencies as LINK_ONLY, so the
 # consumer has to locate them; they come from depthai-core's vcpkg tree.
-foreach(dep fmt spdlog yaml-cpp httplib semver magic_enum lz4 liblzma Eigen3 Backward)
+foreach(dep fmt spdlog yaml-cpp httplib semver magic_enum lz4 liblzma Eigen3)
     find_package(${dep} CONFIG REQUIRED)
 endforeach()
 find_package(BZip2 REQUIRED)

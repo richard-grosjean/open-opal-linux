@@ -3,7 +3,7 @@
 # Build from the repo:  cd packaging && makepkg -si
 pkgname=open-opal-linux
 pkgver=0.2.0
-pkgrel=6
+pkgrel=7
 pkgdesc="Opal C1 webcam controls for Linux: focus, white balance and exposure on the camera's own ISP"
 arch=(x86_64)
 url="https://github.com/richardgrosjean/open-opal-linux"
@@ -57,6 +57,11 @@ package() {
   # USB access for DepthAI (the Opal enumerates as Movidius 03e7)
   echo 'SUBSYSTEM=="usb", ATTRS{idVendor}=="03e7", MODE="0666"' > "$srcdir/80-movidius.rules"
   install -Dm644 "$srcdir/80-movidius.rules" "$pkgdir/usr/lib/udev/rules.d/80-movidius.rules"
+  # hide the Opal's own UVC webcam from apps: it is upside down and vanishes whenever Open Opal
+  # connects, which makes Chrome drop the camera mid-call. Runs after 70-uaccess.rules so the
+  # login-session ACL is not granted. Opt out: sudo ln -s /dev/null /etc/udev/rules.d/71-open-opal-hide-uvc.rules
+  echo 'SUBSYSTEM=="video4linux", ATTRS{idVendor}=="03e7", ATTRS{idProduct}=="f63d", MODE="0600", TAG-="uaccess"' > "$srcdir/71-open-opal-hide-uvc.rules"
+  install -Dm644 "$srcdir/71-open-opal-hide-uvc.rules" "$pkgdir/usr/lib/udev/rules.d/71-open-opal-hide-uvc.rules"
   # virtual camera: load v4l2loopback at boot with a label Chrome lists
   echo v4l2loopback > "$srcdir/v4l2loopback.conf"
   install -Dm644 "$srcdir/v4l2loopback.conf" "$pkgdir/usr/lib/modules-load.d/open-opal-v4l2loopback.conf"

@@ -56,9 +56,13 @@ steps above.
 .venv/bin/open-opal     # or "Open Opal" in the app menu
 ```
 
-In Chrome or your meeting app, pick **Opal C1 (Open Opal)**, not the plain "Opal C1".
-Start Open Opal first: with `exclusive_caps=1` the virtual camera only appears once it
-receives frames. If the camera doesn't show up, reload the tab.
+In Chrome or your meeting app, pick **Opal C1 (Open Opal)**. The virtual camera exists for
+as long as Open Opal runs, from the moment it starts (black until the camera is streaming).
+The package also hides the Opal's own UVC webcam, the plain "Opal C1", from apps: it is
+upside down on Linux and it vanishes whenever Open Opal connects, which made Meet switch the
+camera off mid-call. To get it back, mask the rule:
+`sudo ln -s /dev/null /etc/udev/rules.d/71-open-opal-hide-uvc.rules`. For the camera to be
+there whenever you join a call, add Open Opal to your desktop's autostart.
 
 Settings save automatically to `~/.config/open-opal-linux/settings.json`.
 
@@ -94,7 +98,8 @@ the bundled one (same major.minor); otherwise it falls back to Qt's Fusion style
 ## Notes
 
 - While Open Opal runs, it has exclusive use of the camera, and the regular Opal webcam
-  device goes away. It returns when the app quits.
+  device goes away. It returns when the app quits (hidden from apps by the package's udev
+  rule, see above).
 - DepthAI warns `Calibration data not found`, because the Opal has no Luxonis lens
   calibration. It's harmless and has nothing to do with image tuning.
 - After you quit, the normal Opal webcam takes about 15 s to come back. If you start Open

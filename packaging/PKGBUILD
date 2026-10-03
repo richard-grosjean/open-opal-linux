@@ -3,7 +3,7 @@
 # Build from the repo:  cd packaging && makepkg -si
 pkgname=open-opal-linux
 pkgver=0.2.0
-pkgrel=1
+pkgrel=6
 pkgdesc="Opal C1 webcam controls for Linux: focus, white balance and exposure on the camera's own ISP"
 arch=(x86_64)
 url="https://github.com/richardgrosjean/open-opal-linux"

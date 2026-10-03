@@ -52,6 +52,12 @@ void V4L2LoopbackOutput::write(const uint8_t* data, size_t size) {
     }
 }
 
+void V4L2LoopbackOutput::writeBlank() {
+    std::vector<uint8_t> frame(frameSize_, 128);  // chroma planes: neutral
+    std::fill(frame.begin(), frame.begin() + frameSize_ * 2 / 3, 16);  // luma plane: video black
+    write(frame.data(), frame.size());
+}
+
 std::optional<std::string> findLoopbackDevice() {
     std::error_code ec;
     std::vector<std::pair<int, std::string>> found;

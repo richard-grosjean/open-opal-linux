@@ -60,6 +60,7 @@ private:
     bool waitForCamera();
     void session();
     void sleepFor(double seconds);
+    void blankOutput();
 
     std::unique_ptr<Impl> impl_;
     std::mutex mutex_;

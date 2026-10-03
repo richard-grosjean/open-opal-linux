@@ -224,7 +224,6 @@ QWidget* MainWindow::imageGroup() {
         form->addRow(label, row);
         connect(row, &SliderRow::changed, this, [this, field](int v) { set([v, field](Settings& s) { s.*field = v; }); });
     };
-    add("Brightness", brightness_, -10, 10, signed_, &Settings::brightness);
     add("Contrast", contrast_, -10, 10, signed_, &Settings::contrast);
     add("Saturation", saturation_, -10, 10, signed_, &Settings::saturation);
     add("Sharpness", sharpness_, 0, 4, {}, &Settings::sharpness);
@@ -261,7 +260,6 @@ void MainWindow::loadIntoWidgets(const Settings& s) {
     iso_->setValue(s.iso);
     selectData(antiBanding_, s.antiBanding, false);
     selectData(tuning_, s.tuning, false);
-    brightness_->setValue(s.brightness);
     contrast_->setValue(s.contrast);
     saturation_->setValue(s.saturation);
     sharpness_->setValue(s.sharpness);

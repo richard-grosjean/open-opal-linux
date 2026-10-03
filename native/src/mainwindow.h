@@ -83,7 +83,6 @@ private:
     SliderRow* iso_ = nullptr;
     QComboBox* antiBanding_ = nullptr;
     QComboBox* tuning_ = nullptr;
-    SliderRow* brightness_ = nullptr;
     SliderRow* contrast_ = nullptr;
     SliderRow* saturation_ = nullptr;
     SliderRow* sharpness_ = nullptr;

@@ -1,6 +1,10 @@
 #include "camera.h"
 
 #include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QStandardPaths>
 
 #include <algorithm>
@@ -31,6 +35,9 @@ constexpr auto kFrameWait = std::chrono::milliseconds(50);
 // the ISP barely responds to manual white balance below ~2000 K
 constexpr double kWbLoopMinK = 2000.0;
 constexpr double kWbLoopMaxK = 10000.0;
+constexpr double kWbRecoverK = 5000.0;  // where the loop drifts when it cannot measure the frame
+constexpr double kSeedHoldSeconds = 0.5;      // keep last session's values this long before handing back to AE/AWB
+constexpr double kLastAutoSaveInterval = 5.0;
 
 // The camera must sit in Opal's firmware this long before we connect. Connecting while it
 // is still coming back from a previous session fails, and rapid switching can leave Opal's
@@ -67,6 +74,34 @@ std::optional<std::filesystem::path> tuningPath(const QString& name) {
     if (name == "low_light") return findDataFile("tuning_color_low_light.bin");
     return std::nullopt;
 }
+
+// Where the chip's auto exposure and white balance settled last time, so the next session can
+// start there instead of from the firmware defaults (which take a second or two to converge).
+struct LastAuto {
+    QString tuning;
+    int exposureUs = 0, iso = 0, wbKelvin = 0;
+    bool operator==(const LastAuto&) const = default;
+
+    static QString path() { return QFileInfo(Settings::path()).path() + "/last-auto.json"; }
+
+    static std::optional<LastAuto> load() {
+        QFile f(path());
+        if (!f.open(QIODevice::ReadOnly)) return std::nullopt;
+        auto doc = QJsonDocument::fromJson(f.readAll());
+        if (!doc.isObject()) return std::nullopt;
+        auto o = doc.object();
+        LastAuto l{o.value("tuning").toString(), o.value("exposure_us").toInt(), o.value("iso").toInt(), o.value("wb_kelvin").toInt()};
+        if (l.exposureUs <= 0 || l.iso <= 0 || l.wbKelvin <= 0) return std::nullopt;
+        return l;
+    }
+
+    void save() const {
+        QDir().mkpath(QFileInfo(path()).path());
+        QFile f(path());
+        if (f.open(QIODevice::WriteOnly | QIODevice::Truncate))
+            f.write(QJsonDocument(QJsonObject{{"tuning", tuning}, {"exposure_us", exposureUs}, {"iso", iso}, {"wb_kelvin", wbKelvin}}).toJson());
+    }
+};
 
 // Point depthai-core at the installed firmware file unless the user already chose one.
 void configureFirmwarePath() {
@@ -144,9 +179,10 @@ std::vector<std::shared_ptr<dai::CameraControl>> buildControls(const Settings& s
         c->setAntiBandingMode(antiBanding(s.antiBanding));
         out.push_back(c);
     }
-    if (want(keys, {"brightness", "contrast", "saturation", "sharpness", "luma_denoise", "chroma_denoise"})) {
+    // No brightness control: with any non-zero value the RVC2 firmware makes the picture pulse
+    // (https://discuss.luxonis.com/d/5384); exposure compensation covers the same need.
+    if (want(keys, {"contrast", "saturation", "sharpness", "luma_denoise", "chroma_denoise"})) {
         auto c = ctrl();
-        c->setBrightness(s.brightness);
         c->setContrast(s.contrast);
         c->setSaturation(s.saturation);
         c->setSharpness(s.sharpness);
@@ -280,7 +316,31 @@ std::optional<faces::Face> decodeFace(dai::NNData& nn) {
 
 }  // namespace
 
+namespace {
+
+struct Output {
+    std::unique_ptr<V4L2LoopbackOutput> dev;
+    QString label;
+};
+
+Output openOutput(const Settings& s, const std::optional<QString>& preferred) {
+    if (!s.outputEnabled) return {nullptr, "output off"};
+    std::optional<std::string> device = preferred ? std::optional(preferred->toStdString()) : findLoopbackDevice();
+    if (!device) return {nullptr, "no v4l2loopback device"};
+    try {
+        return {std::make_unique<V4L2LoopbackOutput>(*device, kOutputSize.first, kOutputSize.second), QString::fromStdString(*device)};
+    } catch (const std::system_error& e) {
+        return {nullptr, QString("%1: %2").arg(QString::fromStdString(*device), QString::fromUtf8(e.code().message().c_str()))};
+    }
+}
+
+}  // namespace
+
 struct CameraWorker::Impl {
+    // Held for the life of the worker, not per session: Chrome only re-reads the camera list on
+    // udev events, and the one event it gets is the Opal's own UVC node vanishing while we connect.
+    // Being attached before that happens is what makes us show up in the list.
+    Output output;
     std::optional<dai::NNArchive> faceArchive;
     std::optional<QString> faceModelError;
 
@@ -329,12 +389,27 @@ void CameraWorker::focusOnce() { oneShotFocus_ = true; }
 void CameraWorker::setPreviewEnabled(bool enabled) { previewEnabled_ = enabled; }
 void CameraWorker::restart() { restart_ = true; }
 
+// Show black rather than a frozen last frame while the camera is away.
+void CameraWorker::blankOutput() {
+    if (!impl_->output.dev) return;
+    try {
+        impl_->output.dev->writeBlank();
+    } catch (const std::exception&) {
+        impl_->output.dev.reset();
+    }
+}
+
 void CameraWorker::sleepFor(double seconds) {
     double end = now() + seconds;
     while (running_ && now() < end) std::this_thread::sleep_for(std::chrono::milliseconds(100));
 }
 
 void CameraWorker::run() {
+    {
+        std::lock_guard lock(mutex_);
+        impl_->output = openOutput(settings_, outputDevice_);
+    }
+    if (impl_->output.dev) impl_->output.dev->writeBlank();
     int failures = 0;
     while (running_) {
         if (!waitForCamera()) return;
@@ -377,22 +452,6 @@ bool CameraWorker::waitForCamera() {
 
 namespace {
 
-struct Output {
-    std::unique_ptr<V4L2LoopbackOutput> dev;
-    QString label;
-};
-
-Output openOutput(const Settings& s, const std::optional<QString>& preferred) {
-    if (!s.outputEnabled) return {nullptr, "output off"};
-    std::optional<std::string> device = preferred ? std::optional(preferred->toStdString()) : findLoopbackDevice();
-    if (!device) return {nullptr, "no v4l2loopback device"};
-    try {
-        return {std::make_unique<V4L2LoopbackOutput>(*device, kOutputSize.first, kOutputSize.second), QString::fromStdString(*device)};
-    } catch (const std::system_error& e) {
-        return {nullptr, QString("%1: %2").arg(QString::fromStdString(*device), QString::fromUtf8(e.code().message().c_str()))};
-    }
-}
-
 // Nudge the manual WB so the frame's red/blue balance approaches the target.
 // Telling the ISP the light is warmer (lower K) makes it add more blue, so a frame that is
 // too red needs a lower K.
@@ -401,8 +460,9 @@ double wbStep(const dai::ImgFrame& img, double kelvin, int warmth, dai::InputQue
     int w = img.getWidth(), h = img.getHeight();
     if (data.size() < static_cast<size_t>(w) * h * 3) return kelvin;
     auto balance = redBlueBalance(data.data(), w, h, w * 3);
-    if (!balance) return kelvin;
-    double error = *balance - warmth * 0.05;
+    // No usable mid-tones: the frame is dark, or so far off that one channel clips everywhere
+    // (a stale manual K does this). Drift back towards daylight instead of staying stuck.
+    double error = balance ? *balance - warmth * 0.05 : std::log(kelvin / kWbRecoverK);
     if (std::abs(error) < 0.015) return kelvin;
     bool atFloor = kelvin <= kWbLoopMinK && error > 0;
     bool atCeiling = kelvin >= kWbLoopMaxK && error < 0;
@@ -446,6 +506,15 @@ void CameraWorker::session() {
     if (blob) pipeline.setCameraTuningBlobPath(*blob);
 
     auto cam = pipeline.create<dai::node::Camera>()->build(dai::CameraBoardSocket::CAM_A, kSensorSize, kFps);
+
+    // Start from where AE/AWB settled last time (same tuning only: the numbers differ between
+    // tunings), then hand control back to the chip once frames are flowing.
+    auto last = LastAuto::load();
+    if (last && last->tuning != s.tuning) last.reset();
+    bool seedAe = last && s.autoExposure;
+    bool seedWb = last && s.wbMode != wb::kManual;
+    if (seedAe) cam->initialControl.setManualExposure(std::clamp(last->exposureUs, 1, 33000), std::clamp(last->iso, 100, 3200));
+    if (seedWb) cam->initialControl.setManualWhiteBalance(std::clamp(last->wbKelvin, 1000, 12000));
     auto mainQ = cam->requestOutput(kOutputSize, dai::ImgFrame::Type::NV12, dai::ImgResizeMode::CROP, kFps)->createOutputQueue(2, false);
     auto previewQ =
         cam->requestOutput(kPreviewSize, dai::ImgFrame::Type::BGR888i, dai::ImgResizeMode::CROP, kPreviewFps)->createOutputQueue(2, false);
@@ -465,15 +534,39 @@ void CameraWorker::session() {
     double lastFace = 0;
     pipeline.start();
 
-    for (auto& c : buildControls(s)) controlQ->send(c);
+    {
+        QSet<QString> keys{"auto_focus", "anti_banding", "contrast"};
+        if (!seedAe) keys.insert("auto_exposure");
+        if (!seedWb) keys.insert("wb_mode");
+        for (auto& c : buildControls(s, keys)) controlQ->send(c);
+    }
 
-    Output output = openOutput(s, outputDevice_);
+    Output& output = impl_->output;
+    if (s.outputEnabled && !output.dev) {  // not opened yet, or lost on an earlier write error
+        output = openOutput(s, outputDevice_);
+        if (output.dev) output.dev->writeBlank();
+    }
     QStringList notes;
     if (s.tuning == "low_light" && !blob) notes << "tuning file missing, using default; run install.sh";
     if (!faceQ) notes << QString("face metering unavailable: %1").arg(impl_->faceModelError.value_or("unknown"));
     emit status(QString("Streaming") + (notes.isEmpty() ? QString() : QString(" (%1)").arg(notes.join("; "))));
 
     double wbKelvin = s.wbKelvin;
+    bool wbSeeded = s.wbMode != wb::kAutoBiased;  // biased: start from the chip's AWB once it reports one
+    if (seedWb && s.wbMode == wb::kAutoBiased) {  // ... unless we have last time's value: the loop just carries on
+        wbKelvin = std::clamp<double>(last->wbKelvin, kWbLoopMinK, kWbLoopMaxK);
+        wbSeeded = true;
+    }
+    double seedHandoffAt = 0;  // when to switch the seeded values back to auto; 0 = nothing pending
+    LastAuto cache = last.value_or(LastAuto{});
+    cache.tuning = s.tuning;
+    double lastCacheSave = now();
+    auto rememberAuto = [&](const Stats& st) {
+        LastAuto next = cache;
+        if (s.autoExposure && st.exposureUs > 0 && st.iso > 0) next.exposureUs = st.exposureUs, next.iso = st.iso;
+        if (s.wbMode != wb::kManual && st.wbKelvin > 0) next.wbKelvin = st.wbKelvin;
+        if (next != cache) (cache = next).save();
+    };
     double lastWbStep = 0;
     double focusDeadline = 0;
     int frames = 0;
@@ -499,9 +592,10 @@ void CameraWorker::session() {
                     settings_ = s;
                 }
                 for (auto& c : buildControls(s, keys)) controlQ->send(c);
-                if (enteringBiased && st.wbKelvin) wbKelvin = std::clamp<double>(st.wbKelvin, kWbLoopMinK, kWbLoopMaxK);  // start near the chip's AWB
+                if (enteringBiased) wbSeeded = false;
                 if (outputToggled) {
                     output = openOutput(s, outputDevice_);
+                    if (output.dev) output.dev->writeBlank();
                     st.output = output.label;
                 }
             }
@@ -531,13 +625,28 @@ void CameraWorker::session() {
                 st.iso = frame->getSensitivity();
                 st.exposureUs = static_cast<int>(frame->getExposureTime().count());
                 st.wbKelvin = frame->getColorTemperature();
+                if ((seedAe || seedWb) && !seedHandoffAt) seedHandoffAt = now() + kSeedHoldSeconds;
+            }
+
+            if (seedHandoffAt && now() >= seedHandoffAt) {
+                seedHandoffAt = 0;
+                if (seedAe) for (auto& c : buildControls(s, {"auto_exposure"})) controlQ->send(c);
+                if (seedWb && s.wbMode == wb::kAuto) for (auto& c : buildControls(s, {"wb_mode"})) controlQ->send(c);
+                seedAe = seedWb = false;
             }
 
             if (auto pv = previewQ->tryGet<dai::ImgFrame>()) {
                 double t = now();
                 if (s.wbMode == wb::kAutoBiased && t - lastWbStep >= kWbLoopInterval) {
-                    lastWbStep = t;
-                    wbKelvin = wbStep(*pv, wbKelvin, s.wbWarmth, *controlQ);
+                    // start near the chip's own estimate rather than whatever K was saved last time
+                    if (!wbSeeded && st.wbKelvin) {
+                        wbKelvin = std::clamp<double>(st.wbKelvin, kWbLoopMinK, kWbLoopMaxK);
+                        wbSeeded = true;
+                    }
+                    if (wbSeeded) {
+                        lastWbStep = t;
+                        wbKelvin = wbStep(*pv, wbKelvin, s.wbWarmth, *controlQ);
+                    }
                 }
                 if (previewEnabled_) {
                     auto img = wrapPreview(std::move(pv));
@@ -576,13 +685,18 @@ void CameraWorker::session() {
                 fpsT0 = t;
                 emit stats(st);
             }
+            if (t - lastCacheSave >= kLastAutoSaveInterval) {
+                lastCacheSave = t;
+                rememberAuto(st);
+            }
         }
+        rememberAuto(st);
     } catch (...) {
-        output.dev.reset();
+        blankOutput();
         try { pipeline.stop(); pipeline.wait(); } catch (...) {}
         throw;
     }
-    output.dev.reset();
+    blankOutput();
     pipeline.stop();
     pipeline.wait();
 }

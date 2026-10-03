@@ -26,7 +26,6 @@ QJsonObject toJson(const Settings& s) {
         {"face_metering", s.faceMetering},
         {"anti_banding", s.antiBanding},
         {"tuning", s.tuning},
-        {"brightness", s.brightness},
         {"contrast", s.contrast},
         {"saturation", s.saturation},
         {"sharpness", s.sharpness},
@@ -54,7 +53,6 @@ Settings fromJson(const QJsonObject& o) {
     s.faceMetering = b("face_metering", d.faceMetering);
     s.antiBanding = str("anti_banding", d.antiBanding);
     s.tuning = str("tuning", d.tuning);
-    s.brightness = i("brightness", d.brightness);
     s.contrast = i("contrast", d.contrast);
     s.saturation = i("saturation", d.saturation);
     s.sharpness = i("sharpness", d.sharpness);

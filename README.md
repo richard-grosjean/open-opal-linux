@@ -84,8 +84,9 @@ the bundled one (same major.minor); otherwise it falls back to Qt's Fusion style
   core. The model downloads from the Luxonis model zoo on first run, then stays cached. Shutter times
   above 33 ms would drop below 30 fps, so the slider stops there. Set anti-flicker to
   match your mains frequency (50 Hz in Europe).
-- **Image**: brightness, contrast, saturation, sharpness, and noise reduction for
-  brightness and colour, all applied on the chip. *Tuning* picks the image tuning loaded
+- **Image**: contrast, saturation, sharpness, and noise reduction for luma and colour,
+  all applied on the chip. There is no brightness slider: the camera firmware makes the
+  picture pulse with any brightness other than 0, so use exposure compensation instead. *Tuning* picks the image tuning loaded
   onto the camera. *Low light* (the default) is Luxonis' low-light file, which `install.sh`
   downloads: it gives a brighter, much more neutral image in dim rooms. Changing tuning
   restarts the camera, which takes about 20 s.

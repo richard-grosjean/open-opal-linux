@@ -17,6 +17,8 @@ public:
 
     // Throws std::system_error on I/O error, std::invalid_argument on a wrong size.
     void write(const uint8_t* data, size_t size);
+    // A black frame, so readers that open the device before the camera streams get a picture.
+    void writeBlank();
     size_t frameSize() const { return frameSize_; }
     const std::string& device() const { return device_; }
 

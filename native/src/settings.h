@@ -32,7 +32,6 @@ struct Settings {
 
     // image processing on the chip
     QString tuning = "low_light";  // "low_light" or "default"; applies on connect
-    int brightness = 0;   // -10..10
     int contrast = 0;     // -10..10
     int saturation = 0;   // -10..10
     int sharpness = 1;    // 0..4
